@@ -44,23 +44,24 @@ fn main() -> ! {
 
     rtt_init_print!();
 
+    let mut imu_ = imu::IMU::new(i2c);
+    imu_.reset();
+
     let config: IMUConfig = IMUConfig::new()
         .with_accel_odr(imu::AccelODR::Hz_416)
         .with_accel_range(imu::AccelRange::Range4G)
         .with_gyro_odr(imu::GyroODR::Hz_416)
         .with_gyro_range(imu::GyroRange::Range1000DPS);
 
-    let config = imu::IMUConfig::default();
-    let mut imu_ = imu::IMU::new(i2c);
-    imu_.reset();
-
     match imu_.configure(config) {
         Ok(_) => rprintln!("IMU configured"),
         Err(e) => rprintln!("Error configuring IMU: {:?}", e),
     }
 
+    imu_.calibrate(); 
+
     loop {
-        match imu_.read_gyro() {
+        match imu_.read_accel() {
             Ok((accel_x, accel_y, accel_z)) => {
                 rprintln!("Accel: X: {:.2} Y: {:.2} Z: {:.2}", accel_x, accel_y, accel_z);
             }
@@ -68,6 +69,7 @@ fn main() -> ! {
                 rprintln!("Error reading accel: {:?}", e);
             }
         }
-        delay(1_000_000);
+ 
+        delay(10_000_000);
     }
 }

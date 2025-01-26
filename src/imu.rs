@@ -88,7 +88,7 @@ impl GyroRange {
         match self {
             GyroRange::Range245DPS => 8.75 / 1000.0,
             GyroRange::Range500DPS => 17.50 / 1000.0,
-            GyroRange::Range1000DPS => 3.50 / 1000.0,
+            GyroRange::Range1000DPS => 35.0 / 1000.0,
             GyroRange::Range2000DPS => 70.0 / 1000.0,
         }
     }
@@ -141,10 +141,20 @@ impl IMUConfig {
     }
 }
 
+pub struct Calibration {
+    pub accel_offset_x: f32,
+    pub accel_offset_y: f32,
+    pub accel_offset_z: f32,
+    pub gyro_offset_x: f32,
+    pub gyro_offset_y: f32,
+    pub gyro_offset_z: f32,
+}
+
 pub struct IMU<I2C> {
     i2c: I2C,
     accel_scale: f32,
     gyro_scale: f32,
+    calibration: Option<Calibration>,
 }
 
 impl<I2C, E> IMU<I2C>
@@ -156,6 +166,7 @@ where
             i2c,
             accel_scale: 1.0,
             gyro_scale: 1.0,
+            calibration: None,
         }
     }
 
@@ -169,7 +180,16 @@ where
         let accel_y = (data[2] as i16 | (data[3] as i16) << 8) as f32 * self.accel_scale;
         let accel_z = (data[4] as i16 | (data[5] as i16) << 8) as f32 * self.accel_scale;
 
-        Ok((accel_x, accel_y, accel_z))
+        if self.calibration.is_some() {
+            let calibration = self.calibration.as_ref().unwrap();
+            Ok((
+                accel_x - calibration.accel_offset_x,
+                accel_y - calibration.accel_offset_y,
+                accel_z - calibration.accel_offset_z,
+            ))
+        } else {
+            Ok((accel_x, accel_y, accel_z))
+        }
     }
 
     pub fn read_gyro(&mut self) -> Result<(f32, f32, f32), IMUError<E>> {
@@ -181,8 +201,16 @@ where
         let gyro_x = (data[0] as i16 | (data[1] as i16) << 8) as f32 * self.gyro_scale;
         let gyro_y = (data[2] as i16 | (data[3] as i16) << 8) as f32 * self.gyro_scale;
         let gyro_z = (data[4] as i16 | (data[5] as i16) << 8) as f32 * self.gyro_scale;
-
-        Ok((gyro_x, gyro_y, gyro_z))
+        if self.calibration.is_some() {
+            let calibration = self.calibration.as_ref().unwrap();
+            Ok((
+                gyro_x - calibration.gyro_offset_x,
+                gyro_y - calibration.gyro_offset_y,
+                gyro_z - calibration.gyro_offset_z,
+            ))
+        } else {
+            Ok((gyro_x, gyro_y, gyro_z))
+        }
     }
 
     pub fn read_temp(&mut self) -> Result<f32, IMUError<E>> {
@@ -195,7 +223,49 @@ where
 
         Ok(temp)
     }
-    pub fn calibrate() {}
+
+    pub fn calibrate(&mut self) {
+        const N: usize = 1000;
+        let mut accel_offset_x = 0.0;
+        let mut accel_offset_y = 0.0;
+        let mut accel_offset_z = 0.0;
+        let mut gyro_offset_x = 0.0;
+        let mut gyro_offset_y = 0.0;
+        let mut gyro_offset_z = 0.0;
+
+        for _ in 0..N {
+            // Accumulate data
+            match self.read_accel() {
+                Ok((x, y, z)) => {
+                    accel_offset_x += x;
+                    accel_offset_y += y;
+                    accel_offset_z += z;
+                }
+                Err(e) => {
+                    IMUError::I2CError(e);
+                }
+            }
+            match self.read_gyro() {
+                Ok((x, y, z)) => {
+                    gyro_offset_x += x;
+                    gyro_offset_y += y;
+                    gyro_offset_z += z;
+                }
+                Err(e) => {
+                    IMUError::I2CError(e);
+                }
+            }
+        }
+
+        self.calibration = Some(Calibration {
+            accel_offset_x: accel_offset_x / N as f32,
+            accel_offset_y: accel_offset_y / N as f32,
+            accel_offset_z: -1.0 + (accel_offset_z / N as f32),
+            gyro_offset_x: gyro_offset_x / N as f32,
+            gyro_offset_y: gyro_offset_y / N as f32,
+            gyro_offset_z: gyro_offset_z / N as f32,
+        });
+    }
 }
 
 impl<I2C, E> IMU<I2C>
@@ -233,8 +303,7 @@ where
 
     pub fn reset(&mut self) {
         // Reset device
-        match self.i2c.write(DEVICE_ADDR, &[CTRL3_C, 0b00000101])
-            {
+        match self.i2c.write(DEVICE_ADDR, &[CTRL3_C, 0b00000101]) {
             Ok(_) => {}
             Err(_) => {}
         };
