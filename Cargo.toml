@@ -1,0 +1,14 @@
+[package]
+name = "rustblink"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cortex-m = "0.7.7"
+cortex-m-rt = "0.7.5"
+panic-halt = "1.0.0"
+stm32-usbd = "0.7.0"
+usb-device = "0.3.2"
+usbd-serial = "0.2.2"
+stm32g4xx-hal = { git = "https://github.com/stm32-rs/stm32g4xx-hal.git", branch= "main", features = ["stm32g431"]}
+rtt-target = "0.6.1"
