@@ -2,35 +2,29 @@
 #![no_main]
 
 use cortex_m_rt::entry;
+use filter::Filter;
 use imu::IMUConfig;
 use panic_halt as _;
 
 use stm32g4xx_hal::{
-    delay::DelayFromCountDownTimer, i2c::Config, interrupt, prelude::*, pwr::PwrExt, rcc, stm32,
-    time::ExtU32, time::RateExtU32, timer::Event::TimeOut, timer::Timer,
+    i2c::Config, pac::TIM2, prelude::*, pwr::PwrExt, rcc, stm32, time::ExtU32, time::RateExtU32,
+    timer::CountDownTimer, timer::Timer,
 };
 
 use cortex_m as _;
 use defmt::info;
 use defmt_rtt as _;
 
-use libm::{atan2f, sqrtf};
+
 
 mod imu;
+mod filter;
 
-const RAD_TO_DEG: f32 = 180.0 / core::f32::consts::PI;
 
 struct State {
-    roll: f32,
     pitch: f32,
-    yaw: f32,
+    roll: f32,
 }
-
-static mut STATE: State = State {
-    roll: 0.0,
-    pitch: 0.0,
-    yaw: 0.0,
-};
 
 #[entry]
 fn main() -> ! {
@@ -45,48 +39,38 @@ fn main() -> ! {
     //});
     let mut rcc = dp.RCC.constrain();
 
-    //let gpioa = dp.GPIOA.split(&mut rcc);
+    let gpioa = dp.GPIOA.split(&mut rcc);
 
-    //let sda = gpioa.pa8.into_alternate_open_drain();
-    //let scl = gpioa.pa9.into_alternate_open_drain();
-    //let mut i2c = dp.I2C2.i2c(sda, scl, Config::new(400.kHz()), &mut rcc);
+    let sda = gpioa.pa8.into_alternate_open_drain();
+    let scl = gpioa.pa9.into_alternate_open_drain();
+    let mut i2c = dp.I2C2.i2c(sda, scl, Config::new(400.kHz()), &mut rcc);
 
-    //let mut imu_ = imu::IMU::new(i2c);
-    //imu_.reset();
+    let mut imu_ = imu::IMU::new(i2c);
+    imu_.reset();
 
-    //let config: IMUConfig = IMUConfig::new()
-    //    .with_accel_odr(imu::AccelODR::Hz_416)
-    //    .with_accel_range(imu::AccelRange::Range4G)
-    //    .with_gyro_odr(imu::GyroODR::Hz_416)
-    //    .with_gyro_range(imu::GyroRange::Range1000DPS);
+    let config: IMUConfig = IMUConfig::new()
+        .with_accel_odr(imu::AccelODR::Hz_416)
+        .with_accel_range(imu::AccelRange::Range4G)
+        .with_gyro_odr(imu::GyroODR::Hz_416)
+        .with_gyro_range(imu::GyroRange::Range1000DPS);
 
-    //imu_.configure(config);
-    //imu_.calibrate();
+    imu_.configure(config);
+    imu_.calibrate();
 
-    info!("This is pre interrupt");
+    let mut timer: CountDownTimer<TIM2> =
+        Timer::new(dp.TIM2, &mut rcc.clocks).start_count_down(2.millis());
 
-    let mut timer = Timer::new(dp.TIM2, &rcc.clocks).start_count_down(2.millis());
-    timer.listen(TimeOut);
-
+    let mut compfilter = filter::ComplementaryFilter::new(0.2);
 
     loop {
-        cortex_m::asm::wfi();
+        if let (Ok((ax, ay, az)), Ok((gx, gy, gz))) = (imu_.read_accel(), imu_.read_gyro()) {
+            let (roll, pitch) = compfilter.update(ax, ay, az, gx, gy, gz, 0.02);
+
+            info!(
+                "Pitch: {}, Roll: {}",
+                pitch, roll
+            );
+        }
+        while timer.wait().is_err() {}
     }
-}
-#[interrupt]
-fn TIM2() {
-    // if let (Ok((ax, ay, az)), Ok((gx, gy, gz))) = (imu_.read_accel(), imu_.read_gyro()) {
-    //     let a_pitch = atan2f(ay, az) * RAD_TO_DEG;
-    //     let a_roll = atan2f(-ax, sqrtf(ay * ay + az * az)) * RAD_TO_DEG;
-
-    //     let g_pitch = STATE.pitch + 0.02 * gx;
-    //     let g_roll = STATE.roll + 0.02 * gy;
-
-    //     STATE.pitch = 0.98 * g_pitch + 0.02 * a_pitch;
-    //     STATE.roll = 0.98 * g_roll + 0.02 * a_roll;
-    //     STATE.yaw = STATE.yaw + 0.02 * gz;
-
-    //     info!("Pitch: {}, Roll: {}, Yaw: {}", pitch, roll, yaw);
-    // }
-    info!("This is the interrupt fn");
 }
